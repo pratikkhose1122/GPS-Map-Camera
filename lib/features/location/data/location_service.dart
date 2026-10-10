@@ -35,18 +35,18 @@ class LocationService extends ChangeNotifier {
     }
 
     try {
-      // 1. Check if location services are enabled
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        _setState(LocationState.serviceDisabled);
-        _listenToServiceStatus();
-        return;
-      }
-
-      // 2. Request location permissions
+      // 1. Request location permissions FIRST
       final status = await Permission.location.request();
 
       if (status.isGranted) {
+        // 2. Check if location services (GPS) are enabled
+        final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          _setState(LocationState.serviceDisabled);
+          _listenToServiceStatus();
+          return;
+        }
+
         _setState(LocationState.acquiring);
         _startLocationStream();
         _listenToServiceStatus();
