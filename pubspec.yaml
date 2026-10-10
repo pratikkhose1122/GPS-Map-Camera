@@ -1,0 +1,59 @@
+name: geomapcam
+description: "GeoMapCam: Geo Tagging App — Professional GPS Map Camera."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.10.5
+  permission_handler: ^11.3.1
+  geolocator: ^14.1.1
+  google_maps_flutter: ^2.18.1
+  http: ^1.6.0
+  sensors_plus: ^7.1.1
+  intl: ^0.20.3
+  image: ^4.10.1
+  path_provider: ^2.1.6
+  shared_preferences: ^2.5.5
+  path: ^1.9.1
+  share_plus: ^13.3.1
+  open_location_code: ^1.0.1
+  flutter_timezone: ^5.1.1
+  uuid: ^4.6.0
+  qr_flutter: ^4.1.0
+  url_launcher: ^6.3.2
+  package_info_plus: ^10.2.2
+  pdf: ^3.12.0
+  printing: ^5.14.3
+  image_picker: ^1.2.3
+  google_mobile_ads: ^9.1.0
+
+
+  # Phase 0: No feature packages yet.
+  # Packages will be added phase-by-phase after local build is verified.
+  #
+  # Planned (future phases):
+  #   camera           — device camera preview & capture
+  #   geolocator       — GPS position stream
+  #   google_maps_flutter — live mini-map
+  #   sensors_plus     — accelerometer + magnetometer for compass
+  #   geocoding        — reverse geocode (or HTTP to Google Geocoding API)
+  #   path_provider    — local file storage paths
+  #   image            — Dart image composition for overlay burn-in
+  #   intl             — date/time formatting
+  #   permission_handler — unified permission requests
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/map_preview.png
+    - assets/images/app_logo.png
