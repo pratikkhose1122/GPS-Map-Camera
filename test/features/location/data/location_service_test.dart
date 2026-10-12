@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geomapcam/features/location/data/location_service.dart';
+import 'package:geomapcam/features/location/domain/location_state.dart';
 
 void main() {
   group('LocationService Validation', () {
@@ -110,6 +111,12 @@ void main() {
       );
 
       expect(service.isValidPosition(position), isFalse);
+    });
+
+    test('initial state is LocationState.initializing', () {
+      expect(service.state, equals(LocationState.initializing));
+      expect(service.locationData, isNull);
+      expect(service.addressData, isNull);
     });
   });
 }

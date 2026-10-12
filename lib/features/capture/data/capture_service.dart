@@ -336,11 +336,16 @@ class CaptureService extends ChangeNotifier {
       );
 
       // SUCCESS — state persists until UI calls resetToIdle()
+      final warningMessage = _composer.lastMapFailed
+          ? 'Photo saved, but map could not be loaded.'
+          : null;
+
       _updateState(
         CaptureState(
           status: CaptureStatus.success,
           filePath: savedPath,
           processingMessage: 'Photo ready',
+          warningMessage: warningMessage,
           snapshot: job.metadata.snapshot,
           templateName: job.metadata.template.name,
         ),

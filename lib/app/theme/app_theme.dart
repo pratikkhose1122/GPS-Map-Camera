@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
 
 /// Professional dark camera theme for GPS Map Camera.
 ///

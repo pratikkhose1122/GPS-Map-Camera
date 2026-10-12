@@ -169,22 +169,128 @@ class LiveMetadataOverlay extends StatelessWidget {
     );
 
     Widget mainLayout;
-    if (mapWidget != null && template.id != 'scan_location') {
+    if (template == OverlayTemplate.dateTime) {
+      final now = snapshot.timestamp;
+      final timeStr = DateFormat('hh:mm a').format(now);
+      final dateStr = DateFormat('dd MMMM yyyy').format(now);
+      final dayStr = DateFormat('EEEE').format(now);
+
+      List<Widget> dtChildren = [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              timeStr,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(width: 2, height: 28, color: const Color(0xFFFFC107)),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  dateStr,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  dayStr,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+      ];
+
+      if (template.showAddress) {
+        dtChildren.add(_buildAddress(snapshot.address, template));
+        dtChildren.add(const SizedBox(height: 6));
+      }
+
+      if (template.showCoordinates || template.showAltitudeAndAccuracy) {
+        dtChildren.add(
+          _buildLocationRow(
+            snapshot.latitude,
+            snapshot.longitude,
+            snapshot.accuracy,
+            snapshot.altitude,
+            template,
+          ),
+        );
+      }
+
+      if (template.showPlusCode && metadata.plusCode != null) {
+        dtChildren.add(const SizedBox(height: 4));
+        dtChildren.add(_buildTextRow('Plus Code', metadata.plusCode!, template));
+      }
+
+      mainLayout = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: dtChildren,
+      );
+    } else if (mapWidget != null && template.id != 'scan_location') {
       mainLayout = IntrinsicHeight(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
               width: 120,
-              child: ClipRRect(
-                borderRadius: BorderRadius.only(
-                  topLeft:
-                      (metadata.showAppLogo || metadata.showCameraIndicator)
-                      ? Radius.zero
-                      : const Radius.circular(8.0),
-                  bottomLeft: const Radius.circular(8.0),
-                ),
-                child: mapWidget,
+              child: Stack(
+                fit: StackFit.passthrough,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.only(
+                      topLeft:
+                          (metadata.showAppLogo || metadata.showCameraIndicator)
+                          ? Radius.zero
+                          : const Radius.circular(8.0),
+                      bottomLeft: const Radius.circular(8.0),
+                    ),
+                    child: mapWidget,
+                  ),
+                  if (template == OverlayTemplate.reporting)
+                    Positioned(
+                      top: 4,
+                      left: 4,
+                      right: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4CAF50),
+                          borderRadius: BorderRadius.circular(4),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black38,
+                              blurRadius: 2,
+                              offset: Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Text(
+                            'Check In',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             Expanded(
@@ -320,8 +426,9 @@ class LiveMetadataOverlay extends StatelessWidget {
 
   Widget _buildAddress(String? address, OverlayTemplate template) {
     if (address == null || address.isEmpty) {
+      final hasCoords = controller.metadata.snapshot.hasRequiredLocation;
       return Text(
-        'Address unavailable',
+        hasCoords ? 'Locating address...' : 'Address unavailable',
         style: TextStyle(
           color: Colors.white70,
           fontSize: template.typography.addressSize / 2.5,

@@ -25,6 +25,7 @@ import 'package:geomapcam/features/overlay/domain/overlay_snapshot.dart';
 import 'package:geomapcam/features/locations/domain/models/saved_location.dart';
 
 import 'package:geomapcam/core/localization/app_localizations.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// Camera screen displaying the real device camera preview and live location.
 class CameraScreen extends StatefulWidget {
@@ -91,10 +92,9 @@ class _CameraScreenState extends State<CameraScreen>
 
     _captureService.addListener(_onCaptureStateChanged);
 
-    // Start initializations after the first frame
+    // Coordinated permissions and startup after the first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _cameraService.initialize();
-      _locationService.initialize();
+      _requestPermissionsAndInitialize();
       _compassService.start();
     });
 
@@ -185,6 +185,46 @@ class _CameraScreenState extends State<CameraScreen>
     super.dispose();
   }
 
+  Future<void> _requestPermissionsAndInitialize() async {
+    final cameraStatus = await Permission.camera.status;
+    final locationStatus = await Permission.location.status;
+
+    // Batch request both permissions together if needed
+    if ((!cameraStatus.isGranted && !cameraStatus.isPermanentlyDenied) ||
+        (!locationStatus.isGranted && !locationStatus.isPermanentlyDenied)) {
+      await [
+        Permission.camera,
+        Permission.location,
+      ].request();
+    }
+
+    if (!mounted) return;
+    final preset = _initialized
+        ? _getResolutionPreset(SettingsProvider.of(context))
+        : ResolutionPreset.veryHigh;
+
+    await Future.wait([
+      _cameraService.initialize(
+        preset: preset,
+        requestPermissionIfDenied: false,
+      ),
+      _locationService.initialize(
+        requestPermissionIfDenied: false,
+      ),
+    ]);
+  }
+
+  bool _isPermissionsOrGpsRequired() {
+    final cameraDenied =
+        _cameraService.state == CameraState.permissionDenied ||
+        _cameraService.state == CameraState.permissionPermanentlyDenied;
+    final locationDenied =
+        _locationService.state == LocationState.permissionDenied ||
+        _locationService.state == LocationState.permissionPermanentlyDenied ||
+        _locationService.state == LocationState.serviceDisabled;
+    return cameraDenied || locationDenied;
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_cameraService.state != CameraState.disposed) {
@@ -193,10 +233,7 @@ class _CameraScreenState extends State<CameraScreen>
           state == AppLifecycleState.paused) {
         controller?.dispose();
       } else if (state == AppLifecycleState.resumed) {
-        if (_cameraService.state == CameraState.ready ||
-            _cameraService.state == CameraState.initializing) {
-          _cameraService.initialize();
-        }
+        _requestPermissionsAndInitialize();
       }
     }
 
@@ -222,6 +259,15 @@ class _CameraScreenState extends State<CameraScreen>
           duration: const Duration(seconds: 3),
         ),
       );
+    } else if (state.status == CaptureStatus.success &&
+        state.warningMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(state.warningMessage!),
+          backgroundColor: Colors.orange.shade800,
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
@@ -232,8 +278,29 @@ class _CameraScreenState extends State<CameraScreen>
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
+      body: ListenableBuilder(
+        listenable: Listenable.merge([_cameraService, _locationService]),
+        builder: (context, _) {
+          if (_isPermissionsOrGpsRequired()) {
+            return _buildPermissionsRequiredScreen(context);
+          }
+
+          if (_cameraService.state == CameraState.noCamera) {
+            return _buildErrorState(context, 'No camera found on this device.');
+          }
+
+          if (_cameraService.state == CameraState.error) {
+            return _buildErrorState(
+              context,
+              _cameraService.errorMessage ??
+                  'An error occurred initializing the camera.',
+              actionText: 'Retry',
+              onAction: () => _requestPermissionsAndInitialize(),
+            );
+          }
+
+          return Stack(
+            children: [
           // 1. Camera Layer
           Positioned.fill(
             child: ListenableBuilder(
@@ -457,8 +524,10 @@ class _CameraScreenState extends State<CameraScreen>
             child: _buildBottomNavBar(context, settingsService),
           ),
         ],
-      ),
-    );
+      );
+    },
+  ),
+);
   }
 
   Widget _buildBottomNavBar(BuildContext context, SettingsService settings) {
@@ -491,7 +560,11 @@ class _CameraScreenState extends State<CameraScreen>
             _buildNavIcon(
               Icons.grid_view,
               'Template',
-              () => Navigator.pushNamed(context, AppRouter.templates),
+              () => Navigator.pushNamed(
+                context,
+                AppRouter.templates,
+                arguments: _overlayController.snapshot,
+              ),
             ),
 
             // Shutter Button
@@ -565,20 +638,8 @@ class _CameraScreenState extends State<CameraScreen>
         return const Center(child: CircularProgressIndicator());
 
       case CameraState.permissionDenied:
-        return _buildErrorState(
-          context,
-          'Camera permission is required to use GPS Map Camera.',
-          actionText: 'Grant Permission',
-          onAction: () => _cameraService.initialize(),
-        );
-
       case CameraState.permissionPermanentlyDenied:
-        return _buildErrorState(
-          context,
-          'Camera permission is permanently denied. Please enable it in system settings.',
-          actionText: 'Open Settings',
-          onAction: () => _cameraService.openSettings(),
-        );
+        return _buildPermissionsRequiredScreen(context);
 
       case CameraState.noCamera:
         return _buildErrorState(context, 'No camera found on this device.');
@@ -865,6 +926,253 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
+  Widget _buildPermissionsRequiredScreen(BuildContext context) {
+    final cameraGranted =
+        _cameraService.state != CameraState.permissionDenied &&
+        _cameraService.state != CameraState.permissionPermanentlyDenied;
+    final locationGranted =
+        _locationService.state != LocationState.permissionDenied &&
+        _locationService.state != LocationState.permissionPermanentlyDenied;
+    final gpsEnabled = _locationService.state != LocationState.serviceDisabled;
+
+    final isPermanentlyDenied =
+        _cameraService.state == CameraState.permissionPermanentlyDenied ||
+        _locationService.state == LocationState.permissionPermanentlyDenied;
+
+    return Container(
+      color: const Color(0xFF0D0D0D),
+      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
+      child: SafeArea(
+        child: Column(
+          children: [
+            const Spacer(),
+            // Shield / Camera GPS Icon Badge
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFB300).withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: const Color(0xFFFFB300).withValues(alpha: 0.4),
+                  width: 2,
+                ),
+              ),
+              child: const Icon(
+                Icons.security_outlined,
+                size: 42,
+                color: Color(0xFFFFB300),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Permissions & GPS Required',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.3,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'GPS Map Camera requires Camera and Location access to capture photos with accurate geotags and map stamps.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.7),
+                fontSize: 14,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 32),
+
+            // Checklist Card
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E1E),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Column(
+                children: [
+                  _buildChecklistItem(
+                    icon: Icons.camera_alt_outlined,
+                    title: 'Camera Access',
+                    subtitle: 'Required to view and capture photos/videos',
+                    isGranted: cameraGranted,
+                  ),
+                  const Divider(color: Colors.white10, height: 24),
+                  _buildChecklistItem(
+                    icon: Icons.location_on_outlined,
+                    title: 'Location Access',
+                    subtitle: 'Required for GPS coordinates & map stamps',
+                    isGranted: locationGranted,
+                  ),
+                  const Divider(color: Colors.white10, height: 24),
+                  _buildChecklistItem(
+                    icon: Icons.gps_fixed,
+                    title: 'Device GPS (Location Service)',
+                    subtitle: 'Device location service must be turned ON',
+                    isGranted: gpsEnabled,
+                  ),
+                ],
+              ),
+            ),
+
+            const Spacer(),
+
+            // Primary Action Button
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFFB300),
+                  foregroundColor: Colors.black,
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                icon: Icon(
+                  isPermanentlyDenied
+                      ? Icons.settings
+                      : (!gpsEnabled && cameraGranted && locationGranted)
+                          ? Icons.location_searching
+                          : Icons.check_circle_outline,
+                  color: Colors.black,
+                  size: 22,
+                ),
+                label: Text(
+                  isPermanentlyDenied
+                      ? 'Open App Settings'
+                      : (!gpsEnabled && cameraGranted && locationGranted)
+                          ? 'Turn On GPS'
+                          : 'Grant Required Permissions',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                onPressed: () async {
+                  if (isPermanentlyDenied) {
+                    await openAppSettings();
+                  } else if (!gpsEnabled && cameraGranted && locationGranted) {
+                    await _locationService.openLocationSettings();
+                  } else {
+                    await _requestPermissionsAndInitialize();
+                  }
+                },
+              ),
+            ),
+
+            if (isPermanentlyDenied) ...[
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: _requestPermissionsAndInitialize,
+                child: const Text(
+                  'Already enabled? Tap to refresh',
+                  style: TextStyle(
+                    color: Color(0xFFFFB300),
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChecklistItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool isGranted,
+  }) {
+    return Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: isGranted
+                ? const Color(0xFF4CAF50).withValues(alpha: 0.15)
+                : const Color(0xFFFF5252).withValues(alpha: 0.15),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: isGranted ? const Color(0xFF4CAF50) : const Color(0xFFFF5252),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.6),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: isGranted
+                ? const Color(0xFF4CAF50).withValues(alpha: 0.15)
+                : const Color(0xFFFF5252).withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isGranted
+                  ? const Color(0xFF4CAF50).withValues(alpha: 0.4)
+                  : const Color(0xFFFF5252).withValues(alpha: 0.4),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isGranted ? Icons.check_circle : Icons.cancel_outlined,
+                size: 14,
+                color: isGranted ? const Color(0xFF4CAF50) : const Color(0xFFFF5252),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                isGranted ? 'Granted' : 'Required',
+                style: TextStyle(
+                  color: isGranted ? const Color(0xFF4CAF50) : const Color(0xFFFF5252),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildTopControls(BuildContext context) {
     if (_cameraService.state != CameraState.ready) {
       return const SizedBox.shrink();
@@ -1075,6 +1383,16 @@ class _CameraScreenState extends State<CameraScreen>
           }
         });
       }
+      return;
+    }
+
+    if (!isLocationReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Waiting for GPS coordinates...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
       return;
     }
 

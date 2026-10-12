@@ -1,7 +1,7 @@
 name: geomapcam
 description: "GeoMapCam: Geo Tagging App — Professional GPS Map Camera."
 publish_to: 'none'
-version: 1.0.5+5
+version: 1.0.6+6
 
 environment:
   sdk: ^3.10.0

@@ -39,6 +39,11 @@ class MapImageRenderer {
       '&key=${apiKey ?? 'test_key'}',
     );
 
+    if (kDebugMode) {
+      final safeUrl = url.toString().replaceAll(apiKey ?? 'test_key', '***');
+      debugPrint('MapImageRenderer: Requesting static map from: $safeUrl');
+    }
+
     final mapSw = Stopwatch()..start();
     final requestClient = client ?? http.Client();
     try {
@@ -51,10 +56,13 @@ class MapImageRenderer {
       if (response.statusCode == 200) {
         return response.bodyBytes;
       } else {
+        final bodySnippet = response.body.trim();
         debugPrint(
-          'MapImageRenderer failed: HTTP ${response.statusCode} - ${response.body}',
+          'MapImageRenderer failed: HTTP ${response.statusCode} - $bodySnippet',
         );
-        throw Exception('Map generation failed: HTTP ${response.statusCode}');
+        throw Exception(
+          'Map generation failed: HTTP ${response.statusCode} - $bodySnippet',
+        );
       }
     } finally {
       if (client == null) {

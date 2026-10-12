@@ -11,6 +11,13 @@ class AppConfig {
   static String? _geocodingApiKey;
   static String? _staticMapsApiKey;
 
+  static const String _defaultGoogleMapsKey =
+      'AIzaSyBiEdFrH42CInaSx3J8r62MMBcX8RlGco4';
+  static const String _defaultGeocodingKey =
+      'AIzaSyBI-iufyFgaBWbJzAVYNyokHsKQWpZ3FWI';
+  static const String _defaultStaticMapsKey =
+      'AIzaSyAL7aTcaxRxfzD6PCPDEaSNUbQBKlmhw0s';
+
   /// Retrieves the Google Maps API Key securely mapped from Android local.properties.
   ///
   /// The key is cached in memory after the first successful retrieval.
@@ -30,7 +37,8 @@ class AppConfig {
     } catch (e) {
       debugPrint('Unexpected error reading API key: $e');
     }
-    return null;
+    _googleMapsApiKey = _defaultGoogleMapsKey;
+    return _defaultGoogleMapsKey;
   }
 
   /// Retrieves the Geocoding API Key securely mapped from Android local.properties.
@@ -38,22 +46,20 @@ class AppConfig {
   /// The key is cached in memory after the first successful retrieval.
   static Future<String?> getGeocodingApiKey() async {
     if (_geocodingApiKey != null) {
-      debugPrint(
-        'AppConfig: Geocoding key from cache (length=${_geocodingApiKey!.length})',
-      );
       return _geocodingApiKey;
     }
 
     try {
       final String? key = await _channel.invokeMethod('getGeocodingApiKey');
       if (key != null && key.isNotEmpty) {
-        debugPrint(
-          'AppConfig: Geocoding key retrieved from native (length=${key.length})',
-        );
         _geocodingApiKey = key;
         return key;
       } else {
-        debugPrint('AppConfig: Geocoding key was null or empty from native');
+        final fallback = await getGoogleMapsApiKey();
+        if (fallback != null && fallback.isNotEmpty) {
+          _geocodingApiKey = fallback;
+          return fallback;
+        }
       }
     } on PlatformException catch (e) {
       debugPrint(
@@ -62,7 +68,8 @@ class AppConfig {
     } catch (e) {
       debugPrint('AppConfig: Unexpected error reading Geocoding API key: $e');
     }
-    return null;
+    _geocodingApiKey = _defaultGeocodingKey;
+    return _defaultGeocodingKey;
   }
 
   /// Retrieves the Static Maps API Key securely mapped from Android local.properties.
@@ -70,30 +77,31 @@ class AppConfig {
   /// The key is cached in memory after the first successful retrieval.
   static Future<String?> getStaticMapsApiKey() async {
     if (_staticMapsApiKey != null) {
-      debugPrint(
-        'AppConfig: Static Maps key from cache (length=${_staticMapsApiKey!.length})',
-      );
       return _staticMapsApiKey;
     }
 
     try {
       final String? key = await _channel.invokeMethod('getStaticMapsApiKey');
       if (key != null && key.isNotEmpty) {
-        debugPrint(
-          'AppConfig: Static Maps key retrieved from native (length=${key.length})',
-        );
         _staticMapsApiKey = key;
         return key;
       } else {
-        debugPrint('AppConfig: Static Maps key was null or empty from native');
+        final fallback = await getGoogleMapsApiKey();
+        if (fallback != null && fallback.isNotEmpty) {
+          _staticMapsApiKey = fallback;
+          return fallback;
+        }
       }
     } on PlatformException catch (e) {
       debugPrint(
-        'AppConfig: PlatformException getting Static Maps key: ${e.code} - ${e.message}',
+        'AppConfig: PlatformException getting Static Maps key: code=${e.code}, message=${e.message}, details=${e.details}',
       );
-    } catch (e) {
-      debugPrint('AppConfig: Unexpected error reading Static Maps API key: $e');
+    } catch (e, stack) {
+      debugPrint(
+        'AppConfig: Unexpected error reading Static Maps API key: $e\n$stack',
+      );
     }
-    return null;
+    _staticMapsApiKey = _defaultStaticMapsKey;
+    return _defaultStaticMapsKey;
   }
 }

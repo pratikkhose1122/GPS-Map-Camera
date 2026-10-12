@@ -40,6 +40,7 @@ class CameraService extends ChangeNotifier {
   /// Starts the camera initialization and permission flow.
   Future<void> initialize({
     ResolutionPreset preset = ResolutionPreset.veryHigh,
+    bool requestPermissionIfDenied = true,
   }) async {
     _resolutionPreset = preset;
     if (_state != CameraState.initializing) {
@@ -47,7 +48,11 @@ class CameraService extends ChangeNotifier {
     }
 
     try {
-      final status = await Permission.camera.request();
+      PermissionStatus status = await Permission.camera.status;
+      if (!status.isGranted && requestPermissionIfDenied) {
+        status = await Permission.camera.request();
+      }
+
       if (status.isGranted) {
         await _setupCamera();
       } else if (status.isPermanentlyDenied) {

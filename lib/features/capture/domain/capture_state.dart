@@ -14,6 +14,7 @@ class CaptureState {
   final CaptureStatus status;
   final String? filePath;
   final String? errorMessage;
+  final String? warningMessage;
   final String? processingMessage;
   final OverlaySnapshot? snapshot;
   final String? templateName;
@@ -22,6 +23,7 @@ class CaptureState {
     this.status = CaptureStatus.idle,
     this.filePath,
     this.errorMessage,
+    this.warningMessage,
     this.processingMessage,
     this.snapshot,
     this.templateName,
@@ -31,16 +33,20 @@ class CaptureState {
     CaptureStatus? status,
     String? filePath,
     String? errorMessage,
+    String? warningMessage,
     String? processingMessage,
     OverlaySnapshot? snapshot,
     String? templateName,
     bool clearError = false,
+    bool clearWarning = false,
     bool clearFilePath = false,
   }) {
     return CaptureState(
       status: status ?? this.status,
       filePath: clearFilePath ? null : (filePath ?? this.filePath),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      warningMessage:
+          clearWarning ? null : (warningMessage ?? this.warningMessage),
       processingMessage: processingMessage ?? this.processingMessage,
       snapshot: snapshot ?? this.snapshot,
       templateName: templateName ?? this.templateName,
@@ -54,6 +60,7 @@ class CaptureState {
           other.status == status &&
           other.filePath == filePath &&
           other.errorMessage == errorMessage &&
+          other.warningMessage == warningMessage &&
           other.processingMessage == processingMessage &&
           other.snapshot == snapshot &&
           other.templateName == templateName;
@@ -63,6 +70,7 @@ class CaptureState {
       status.hashCode ^
       filePath.hashCode ^
       errorMessage.hashCode ^
+      warningMessage.hashCode ^
       processingMessage.hashCode ^
       snapshot.hashCode ^
       templateName.hashCode;

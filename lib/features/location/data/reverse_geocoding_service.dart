@@ -1,12 +1,17 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:open_location_code/open_location_code.dart' as olc;
 import '../../../core/config/app_config.dart';
 import '../../../core/utils/format_utils.dart';
 import '../domain/address_data.dart';
 import '../domain/location_data.dart';
 
-/// Handles reverse geocoding via Google Maps API with spatial caching and retries.
+/// Handles reverse geocoding with multi-tier fallback:
+/// 1. Google Maps Geocoding API
+/// 2. OpenStreetMap Nominatim API
+/// 3. BigDataCloud Reverse Geocoding API
+/// 4. Offline Geographic Plus Code & Coordinate fallback
 class ReverseGeocodingService {
   ReverseGeocodingService({http.Client? client})
     : _client = client ?? http.Client();
@@ -16,21 +21,19 @@ class ReverseGeocodingService {
   /// Spatial threshold for caching (in meters).
   static const double cacheDistanceThresholdMeters = 50.0;
 
-  /// Time threshold for retrying failed requests.
-  static const Duration retryThrottleDuration = Duration(seconds: 15);
-
   AddressData? _cachedAddress;
   LocationData? _lastSuccessfulLocation;
   DateTime? _lastAttemptTime;
-
   bool _isRequestInProgress = false;
 
   /// Retrieves the address for the given coordinates.
-  /// Returns the cached address if the new location is within [cacheDistanceThresholdMeters].
-  /// Throws an exception if geocoding fails, so the caller can handle the error state.
+  /// Guarantees a valid, human-readable AddressData result.
   Future<AddressData?> getAddressForLocation(LocationData location) async {
-    // 1. Check spatial cache
-    if (_lastSuccessfulLocation != null && _cachedAddress != null) {
+    // 1. Check spatial cache (only if valid non-empty address)
+    if (_lastSuccessfulLocation != null &&
+        _cachedAddress != null &&
+        _cachedAddress!.formattedAddress != 'Address unavailable' &&
+        _cachedAddress!.formattedAddress.isNotEmpty) {
       final distance = FormatUtils.haversineDistance(
         _lastSuccessfulLocation!.latitude,
         _lastSuccessfulLocation!.longitude,
@@ -39,33 +42,58 @@ class ReverseGeocodingService {
       );
 
       if (distance <= cacheDistanceThresholdMeters) {
-        return _cachedAddress; // Still within threshold, return cache
+        return _cachedAddress;
       }
     }
 
     // 2. Prevent concurrent duplicate requests
     if (_isRequestInProgress) {
-      // If we already have a cached address, return it while the new one fetches.
-      // Otherwise, return null.
       return _cachedAddress;
-    }
-
-    // 3. Time-based retry throttle for failures
-    if (_lastAttemptTime != null && _cachedAddress == null) {
-      final timeSinceLastAttempt = DateTime.now().difference(_lastAttemptTime!);
-      if (timeSinceLastAttempt < retryThrottleDuration) {
-        throw Exception('Throttled');
-      }
     }
 
     _isRequestInProgress = true;
     _lastAttemptTime = DateTime.now();
 
     try {
-      final apiKey = await AppConfig.getGeocodingApiKey();
-      if (apiKey == null || apiKey.isEmpty) {
-        throw Exception('No API key available.');
+      // Tier 1: Google Maps Geocoding API
+      final googleResult = await _tryGoogleGeocoding(location);
+      if (googleResult != null) {
+        _cachedAddress = googleResult;
+        _lastSuccessfulLocation = location;
+        return googleResult;
       }
+
+      // Tier 2: OpenStreetMap Nominatim API (Free, high accuracy in India/Global)
+      final osmResult = await _tryOsmNominatim(location);
+      if (osmResult != null) {
+        _cachedAddress = osmResult;
+        _lastSuccessfulLocation = location;
+        return osmResult;
+      }
+
+      // Tier 3: BigDataCloud Reverse Geocoding API (Fast, Free)
+      final bdcResult = await _tryBigDataCloud(location);
+      if (bdcResult != null) {
+        _cachedAddress = bdcResult;
+        _lastSuccessfulLocation = location;
+        return bdcResult;
+      }
+
+      // Tier 4: Offline Geographic Plus Code & Coordinate Fallback
+      final offlineResult = _generateOfflineFallback(location);
+      _cachedAddress = offlineResult;
+      _lastSuccessfulLocation = location;
+      return offlineResult;
+    } finally {
+      _isRequestInProgress = false;
+    }
+  }
+
+  /// Tier 1: Google Maps Geocoding API
+  Future<AddressData?> _tryGoogleGeocoding(LocationData location) async {
+    try {
+      final apiKey = await AppConfig.getGeocodingApiKey();
+      if (apiKey == null || apiKey.isEmpty) return null;
 
       final url = Uri.parse(
         'https://maps.googleapis.com/maps/api/geocode/json?latlng=${location.latitude},${location.longitude}&key=$apiKey',
@@ -73,52 +101,93 @@ class ReverseGeocodingService {
 
       final response = await _client
           .get(url)
-          .timeout(const Duration(seconds: 10));
-      debugPrint('Geocoding HTTP status: ${response.statusCode}');
+          .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final status = data['status'];
-        final errorMessage = data['error_message'];
-        final resultCount = (data['results'] as List?)?.length ?? 0;
+        final results = data['results'] as List?;
 
-        debugPrint('Geocoding status: $status');
-        if (errorMessage != null) {
-          debugPrint('Geocoding error_message: $errorMessage');
+        if (status == 'OK' && results != null && results.isNotEmpty) {
+          return _parseGoogleAddressData(results[0]);
         }
-        debugPrint('Geocoding result count: $resultCount');
-
-        if (status == 'OK' && resultCount > 0) {
-          final result = data['results'][0];
-          final address = _parseAddressData(result);
-
-          _cachedAddress = address;
-          _lastSuccessfulLocation = location;
-          return _cachedAddress;
-        } else if (status == 'ZERO_RESULTS') {
-          // Zero results means the lookup succeeded but there's no address here.
-          // We can cache an "unavailable" address so we don't keep retrying.
-          _cachedAddress = const AddressData(
-            formattedAddress: 'Address unavailable',
-          );
-          _lastSuccessfulLocation = location;
-          return _cachedAddress;
-        } else {
-          throw Exception('API Error ($status)');
-        }
-      } else {
-        throw Exception('Network Error (${response.statusCode})');
       }
     } catch (e) {
-      debugPrint('Geocoding exception: $e');
-      rethrow;
-    } finally {
-      _isRequestInProgress = false;
+      debugPrint('Google Geocoding failed, trying OSM fallback: $e');
     }
+    return null;
   }
 
-  /// Parses the raw JSON result into an AddressData model.
-  AddressData _parseAddressData(Map<String, dynamic> result) {
+  /// Tier 2: OpenStreetMap Nominatim API
+  Future<AddressData?> _tryOsmNominatim(LocationData location) async {
+    try {
+      final url = Uri.parse(
+        'https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.latitude}&lon=${location.longitude}&zoom=18&addressdetails=1',
+      );
+
+      final response = await _client.get(
+        url,
+        headers: {'User-Agent': 'GeoMapCam/1.0 (Android GPS Camera)'},
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['display_name'] != null) {
+          return _parseOsmAddressData(data);
+        }
+      }
+    } catch (e) {
+      debugPrint('OSM Nominatim failed, trying BigDataCloud fallback: $e');
+    }
+    return null;
+  }
+
+  /// Tier 3: BigDataCloud Reverse Geocoding API
+  Future<AddressData?> _tryBigDataCloud(LocationData location) async {
+    try {
+      final url = Uri.parse(
+        'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${location.latitude}&longitude=${location.longitude}&localityLanguage=en',
+      );
+
+      final response = await _client
+          .get(url)
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic>) {
+          return _parseBdcAddressData(data, location);
+        }
+      }
+    } catch (e) {
+      debugPrint('BigDataCloud geocoding failed: $e');
+    }
+    return null;
+  }
+
+  /// Tier 4: Guaranteed offline fallback using Open Location Code and Coordinates
+  AddressData _generateOfflineFallback(LocationData location) {
+    String plusCode = '';
+    try {
+      plusCode = olc.PlusCode.encode(
+        olc.LatLng(location.latitude, location.longitude),
+      ).toString();
+    } catch (_) {}
+
+    final latStr = FormatUtils.formatLatitude(location.latitude);
+    final lonStr = FormatUtils.formatLongitude(location.longitude);
+
+    final String formatted = plusCode.isNotEmpty
+        ? '$plusCode ($latStr, $lonStr)'
+        : '$latStr, $lonStr';
+
+    return AddressData(
+      formattedAddress: formatted,
+      locality: plusCode.isNotEmpty ? plusCode : 'GPS Fix',
+    );
+  }
+
+  AddressData _parseGoogleAddressData(Map<String, dynamic> result) {
     final formattedAddress =
         result['formatted_address'] as String? ?? 'Unknown Location';
 
@@ -157,6 +226,59 @@ class ReverseGeocodingService {
       administrativeArea: administrativeArea,
       country: country,
       postalCode: postalCode,
+    );
+  }
+
+  AddressData _parseOsmAddressData(Map<String, dynamic> data) {
+    final displayName = data['display_name'] as String? ?? 'Unknown Location';
+    final addr = data['address'] as Map<String, dynamic>? ?? {};
+
+    final street = addr['road'] as String? ?? addr['suburb'] as String?;
+    final locality = addr['town'] as String? ??
+        addr['city'] as String? ??
+        addr['village'] as String? ??
+        addr['county'] as String?;
+    final administrativeArea = addr['state'] as String? ??
+        addr['state_district'] as String?;
+    final country = addr['country'] as String?;
+    final postalCode = addr['postcode'] as String?;
+
+    return AddressData(
+      formattedAddress: displayName,
+      street: street,
+      locality: locality,
+      administrativeArea: administrativeArea,
+      country: country,
+      postalCode: postalCode,
+    );
+  }
+
+  AddressData _parseBdcAddressData(
+    Map<String, dynamic> data,
+    LocationData location,
+  ) {
+    final locality = data['locality'] as String? ?? data['city'] as String?;
+    final adminArea = data['principalSubdivision'] as String?;
+    final country = data['countryName'] as String?;
+    final postcode = data['postcode'] as String?;
+
+    final parts = [
+      if (locality != null && locality.isNotEmpty) locality,
+      if (adminArea != null && adminArea.isNotEmpty) adminArea,
+      if (postcode != null && postcode.isNotEmpty) postcode,
+      if (country != null && country.isNotEmpty) country,
+    ];
+
+    final formatted = parts.isNotEmpty
+        ? parts.join(', ')
+        : '${FormatUtils.formatLatitude(location.latitude)}, ${FormatUtils.formatLongitude(location.longitude)}';
+
+    return AddressData(
+      formattedAddress: formatted,
+      locality: locality,
+      administrativeArea: adminArea,
+      country: country,
+      postalCode: postcode,
     );
   }
 }

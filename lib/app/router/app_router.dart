@@ -3,6 +3,7 @@ import 'package:geomapcam/features/camera/presentation/camera_screen.dart';
 import 'package:geomapcam/features/gallery/presentation/gallery_screen.dart';
 import 'package:geomapcam/features/gallery/presentation/photo_viewer_screen.dart';
 import 'package:geomapcam/features/settings/presentation/templates_screen.dart';
+import 'package:geomapcam/features/overlay/domain/overlay_snapshot.dart';
 import 'package:geomapcam/features/gallery/domain/models/photo_item.dart';
 import 'package:geomapcam/features/settings/presentation/settings_screen.dart';
 import 'package:geomapcam/features/capture/presentation/capture_result_screen.dart';
@@ -39,7 +40,8 @@ class AppRouter {
         page = const SettingsScreen();
         break;
       case templates:
-        page = const TemplatesScreen();
+        final snapshot = routeSettings.arguments as OverlaySnapshot?;
+        page = TemplatesScreen(snapshot: snapshot);
         break;
       case photoViewer:
         final photo = routeSettings.arguments as PhotoItem;

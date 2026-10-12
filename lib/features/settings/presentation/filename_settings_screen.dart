@@ -6,6 +6,7 @@ import 'package:geomapcam/features/storage/utils/filename_generator.dart';
 import 'package:geomapcam/features/capture/domain/capture_metadata.dart';
 import 'package:geomapcam/features/overlay/domain/overlay_snapshot.dart';
 import 'package:geomapcam/features/overlay/domain/models/overlay_template.dart';
+import 'package:geomapcam/features/location/data/location_service.dart';
 
 class FilenameSettingsScreen extends StatefulWidget {
   const FilenameSettingsScreen({super.key});
@@ -15,23 +16,26 @@ class FilenameSettingsScreen extends StatefulWidget {
 }
 
 class _FilenameSettingsScreenState extends State<FilenameSettingsScreen> {
-  // A dummy metadata to generate a realistic preview
+  // Metadata to generate a realistic preview
   late CaptureMetadata _previewMetadata;
 
   @override
   void initState() {
     super.initState();
+    final locService = LocationService.instance;
+    final loc = locService.locationData;
+    final addr = locService.addressData;
     _previewMetadata = CaptureMetadata(
       snapshot: OverlaySnapshot(
         timestamp: DateTime.now(),
-        latitude: 19.392953,
-        longitude: 74.843396,
-        altitude: 0.0,
-        accuracy: 10.0,
-        address: 'Newasa, Maharashtra 414105, India',
+        latitude: loc?.latitude ?? 19.0760,
+        longitude: loc?.longitude ?? 72.8777,
+        altitude: loc?.altitude ?? 0.0,
+        accuracy: loc?.accuracy ?? 5.0,
+        address: addr?.formattedAddress ?? 'Current Location Preview',
       ),
       template: OverlayTemplate.advance,
-      plusCode: '9rvr+xwh',
+      plusCode: '7JVW+52X',
       timezone: 'GMT +05:30',
       note: 'MyNote',
       customFields: [],

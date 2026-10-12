@@ -1,19 +1,159 @@
 import 'package:flutter/material.dart';
-import 'package:geomapcam/core/providers/settings_provider.dart';
-import 'package:geomapcam/features/overlay/domain/models/overlay_template.dart';
+import 'package:intl/intl.dart';
+import 'package:open_location_code/open_location_code.dart' as olc;
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:geomapcam/core/providers/settings_provider.dart';
+import 'package:geomapcam/core/providers/locations_provider.dart';
+import 'package:geomapcam/features/location/data/location_service.dart';
+import 'package:geomapcam/features/overlay/domain/models/overlay_template.dart';
+import 'package:geomapcam/features/overlay/domain/overlay_snapshot.dart';
 
 class TemplatesScreen extends StatelessWidget {
-  const TemplatesScreen({super.key});
+  final OverlaySnapshot? snapshot;
+
+  const TemplatesScreen({super.key, this.snapshot});
+
+  static String _getCountryFlag(String? countryName) {
+    if (countryName == null || countryName.isEmpty) return '';
+    final lower = countryName.toLowerCase().trim();
+    if (lower == 'india' || lower == 'in') return '🇮🇳';
+    if (lower == 'united states' || lower == 'usa' || lower == 'us') return '🇺🇸';
+    if (lower == 'united kingdom' || lower == 'uk' || lower == 'gb') return '🇬🇧';
+    if (lower == 'canada' || lower == 'ca') return '🇨🇦';
+    if (lower == 'australia' || lower == 'au') return '🇦🇺';
+    if (lower == 'germany' || lower == 'de') return '🇩🇪';
+    if (lower == 'france' || lower == 'fr') return '🇫🇷';
+    if (lower == 'japan' || lower == 'jp') return '🇯🇵';
+    if (lower == 'brazil' || lower == 'br') return '🇧🇷';
+    return '📍';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final settingsService = SettingsProvider.of(context);
+    final locationsService = LocationsProvider.of(context);
+    final locationService = LocationService.instance;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Template')),
       body: ListenableBuilder(
-        listenable: SettingsProvider.of(context),
+        listenable: Listenable.merge([
+          settingsService,
+          locationsService,
+          locationService,
+        ]),
         builder: (context, _) {
-          final settingsService = SettingsProvider.of(context);
+          final isLive = locationsService.isLiveMode;
+          final savedLoc = locationsService.selectedLocation;
+
+          double? lat;
+          double? lng;
+          String? fullAddress;
+          String? locality;
+          String? adminArea;
+          String? country;
+
+          if (!isLive && savedLoc != null) {
+            lat = savedLoc.latitude;
+            lng = savedLoc.longitude;
+            fullAddress = savedLoc.address;
+            locality = savedLoc.name;
+          } else if (snapshot != null &&
+              snapshot!.latitude != null &&
+              snapshot!.latitude != 0.0) {
+            lat = snapshot!.latitude;
+            lng = snapshot!.longitude;
+            fullAddress = snapshot!.address;
+            locality = locationService.addressData?.locality;
+            adminArea = locationService.addressData?.administrativeArea;
+            country = locationService.addressData?.country;
+          } else if (locationService.locationData != null) {
+            lat = locationService.locationData!.latitude;
+            lng = locationService.locationData!.longitude;
+            fullAddress = locationService.addressData?.formattedAddress;
+            locality = locationService.addressData?.locality;
+            adminArea = locationService.addressData?.administrativeArea;
+            country = locationService.addressData?.country;
+          }
+
+          // Build dynamic location title (e.g., "Kalyan, Maharashtra, India 🇮🇳")
+          final titleParts = <String>[];
+          if (locality != null && locality.isNotEmpty) titleParts.add(locality);
+          if (adminArea != null && adminArea.isNotEmpty) titleParts.add(adminArea);
+          if (country != null && country.isNotEmpty) titleParts.add(country);
+
+          String locationTitle;
+          if (titleParts.isNotEmpty) {
+            final flag = _getCountryFlag(country);
+            locationTitle = '${titleParts.join(', ')}${flag.isNotEmpty ? ' $flag' : ''}';
+          } else if (fullAddress != null && fullAddress.isNotEmpty) {
+            final parts = fullAddress.split(',').map((e) => e.trim()).toList();
+            if (parts.length >= 2) {
+              locationTitle = parts.take(2).join(', ');
+            } else {
+              locationTitle = fullAddress;
+            }
+          } else if (lat != null && lng != null) {
+            locationTitle =
+                'Lat ${lat.toStringAsFixed(4)}°, Long ${lng.toStringAsFixed(4)}°';
+          } else {
+            locationTitle = 'Acquiring location...';
+          }
+
+          // Build dynamic coordinates
+          final coordStr = (lat != null && lng != null)
+              ? 'Lat ${lat.toStringAsFixed(6)}° Long ${lng.toStringAsFixed(6)}°'
+              : 'GPS Coordinates Unavailable';
+
+          // Encode Plus Code dynamically
+          String? plusCode;
+          if (!isLive && savedLoc != null && savedLoc.plusCode != null) {
+            plusCode = savedLoc.plusCode;
+          } else if (lat != null && lng != null) {
+            try {
+              plusCode = olc.PlusCode.encode(olc.LatLng(lat, lng)).toString();
+            } catch (_) {
+              plusCode = null;
+            }
+          }
+
+          // Build address details line
+          String addressLine;
+          if (fullAddress != null && fullAddress.isNotEmpty) {
+            if (plusCode != null && !fullAddress.contains(plusCode)) {
+              addressLine = '$plusCode, $fullAddress';
+            } else {
+              addressLine = fullAddress;
+            }
+          } else if (plusCode != null) {
+            addressLine = plusCode;
+          } else if (lat != null && lng != null) {
+            addressLine =
+                'GPS: ${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+          } else {
+            addressLine = 'Locating address...';
+          }
+
+          // Real-time Date & Time
+          final now = DateTime.now();
+          final timeStr = DateFormat('hh:mm a').format(now);
+          final dateStr = DateFormat('dd MMMM yyyy').format(now);
+          final dayStr = DateFormat('EEEE').format(now);
+          final fullDateStr =
+              DateFormat('EEEE, dd/MM/yyyy hh:mm a').format(now);
+          final offset = now.timeZoneOffset;
+          final sign = offset.isNegative ? '-' : '+';
+          final hours = offset.inHours.abs().toString().padLeft(2, '0');
+          final minutes =
+              (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
+          final gmtStr = 'GMT $sign$hours:$minutes';
+          final dateTimeFullStr = '$fullDateStr $gmtStr';
+
+          // Dynamic QR data
+          final qrData = (lat != null && lng != null)
+              ? '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}\n${fullAddress ?? locationTitle}'
+              : 'Location Unavailable';
+
           return ListView.separated(
             padding: const EdgeInsets.only(top: 16, bottom: 80),
             itemCount: OverlayTemplate.values.length,
@@ -26,21 +166,29 @@ class TemplatesScreen extends StatelessWidget {
               return _TemplatePreviewCard(
                 template: template,
                 isSelected: isSelected,
+                locationTitle: locationTitle,
+                addressLine: addressLine,
+                coordStr: coordStr,
+                dateTimeFullStr: dateTimeFullStr,
+                timeStr: timeStr,
+                dateStr: dateStr,
+                dayStr: dayStr,
+                qrData: qrData,
                 onTap: () => settingsService.setTemplate(template),
               );
             },
           );
         },
       ),
-      // Adding a floating edit button just like the reference screenshot
+      // Floating action button with select symbol (checkmark) to confirm and exit
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          // Open edit options or return to camera
-          Navigator.pop(context);
+          Navigator.pop(context, settingsService.selectedTemplate);
         },
-        backgroundColor: const Color(0xFFFFC107), // Yellow from screenshot
+        backgroundColor: const Color(0xFFFFC107), // Yellow accent
         foregroundColor: Colors.white,
-        child: const Icon(Icons.edit),
+        tooltip: 'Select Template',
+        child: const Icon(Icons.check, size: 28), // Select / checkmark symbol
       ),
     );
   }
@@ -49,11 +197,27 @@ class TemplatesScreen extends StatelessWidget {
 class _TemplatePreviewCard extends StatelessWidget {
   final OverlayTemplate template;
   final bool isSelected;
+  final String locationTitle;
+  final String addressLine;
+  final String coordStr;
+  final String dateTimeFullStr;
+  final String timeStr;
+  final String dateStr;
+  final String dayStr;
+  final String qrData;
   final VoidCallback onTap;
 
   const _TemplatePreviewCard({
     required this.template,
     required this.isSelected,
+    required this.locationTitle,
+    required this.addressLine,
+    required this.coordStr,
+    required this.dateTimeFullStr,
+    required this.timeStr,
+    required this.dateStr,
+    required this.dayStr,
+    required this.qrData,
     required this.onTap,
   });
 
@@ -72,7 +236,7 @@ class _TemplatePreviewCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 16.0, bottom: 4.0),
+            padding: const EdgeInsets.only(left: 16.0, right: 16.0, bottom: 4.0),
             child: Row(
               children: [
                 Text(
@@ -83,6 +247,14 @@ class _TemplatePreviewCard extends StatelessWidget {
                     fontSize: 13,
                   ),
                 ),
+                if (isSelected) ...[
+                  const SizedBox(width: 6),
+                  Icon(
+                    Icons.check_circle,
+                    size: 15,
+                    color: theme.colorScheme.primary,
+                  ),
+                ],
                 if (template == OverlayTemplate.scanLocation)
                   Container(
                     margin: const EdgeInsets.only(left: 8),
@@ -111,9 +283,7 @@ class _TemplatePreviewCard extends StatelessWidget {
               Container(
                 width: double.infinity,
                 constraints: const BoxConstraints(minHeight: 100),
-                color: const Color(
-                  0xFF5B5D5F,
-                ), // Dark grey mimicking the exact screenshot style
+                color: const Color(0xFF5B5D5F), // Dark grey container
                 child: IntrinsicHeight(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -175,25 +345,29 @@ class _TemplatePreviewCard extends StatelessWidget {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               if (template == OverlayTemplate.dateTime) ...[
-                                _buildSimulatedTextContent(),
+                                _buildDateTimeHeader(),
                                 const SizedBox(height: 4),
-                                const Text(
-                                  'Newasa, Maharashtra, India 🇮🇳',
-                                  style: TextStyle(
+                                Text(
+                                  locationTitle,
+                                  style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 14,
                                     fontWeight: FontWeight.bold,
                                   ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                const Text(
-                                  '9rvr+xwh, Newasa, Maharashtra 414105, India\nLat 19.392653° Long 74.843053°',
-                                  style: TextStyle(
+                                Text(
+                                  '$addressLine\n$coordStr',
+                                  style: const TextStyle(
                                     color: Colors.white70,
                                     fontSize: 10,
                                   ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ] else ...[
-                                _buildSimulatedTextContent(),
+                                _buildStandardContent(),
                               ],
                             ],
                           ),
@@ -209,8 +383,7 @@ class _TemplatePreviewCard extends StatelessWidget {
                           ),
                           child: Center(
                             child: QrImageView(
-                              data:
-                                  '19.392653, 74.843053\nNewasa, Maharashtra 414105, India',
+                              data: qrData,
                               version: QrVersions.auto,
                               size: 64.0,
                             ),
@@ -253,62 +426,66 @@ class _TemplatePreviewCard extends StatelessWidget {
         template == OverlayTemplate.reporting;
   }
 
-  Widget _buildSimulatedTextContent() {
-    if (template == OverlayTemplate.dateTime) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const Text(
-            '01:14 PM',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
+  Widget _buildDateTimeHeader() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          timeStr,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 26,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(width: 2, height: 28, color: const Color(0xFFFFC107)),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              dateStr,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Container(width: 2, height: 28, color: const Color(0xFFFFC107)),
-          const SizedBox(width: 8),
-          const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                '06 October 2026',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              Text(
-                'Tuesday',
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-            ],
-          ),
-        ],
-      );
-    }
+            Text(
+              dayStr,
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 
-    return const Column(
+  Widget _buildStandardContent() {
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Text(
-          'Newasa, Maharashtra, India 🇮🇳',
-          style: TextStyle(
+          locationTitle,
+          style: const TextStyle(
             color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        SizedBox(height: 4),
+        const SizedBox(height: 3),
         Text(
-          '9rvr+xwh, Newasa, Maharashtra 414105, India\nLat 19.392653° Long 74.843053°\nTuesday, 06/10/2026 01:14 PM GMT +05:30',
-          style: TextStyle(color: Colors.white70, fontSize: 10),
+          '$addressLine\n$coordStr\n$dateTimeFullStr',
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 10,
+            height: 1.25,
+          ),
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
         ),

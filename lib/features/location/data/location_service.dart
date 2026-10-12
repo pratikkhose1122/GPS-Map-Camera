@@ -9,6 +9,14 @@ import 'reverse_geocoding_service.dart';
 
 /// Manages GPS location permissions, service state, and live updates.
 class LocationService extends ChangeNotifier {
+  static LocationService? _instance;
+  static LocationService get instance => _instance ??= LocationService._();
+
+  LocationService() {
+    _instance ??= this;
+  }
+
+  LocationService._();
   LocationState _state = LocationState.initializing;
   LocationData? _locationData;
   AddressData? _addressData;
@@ -29,17 +37,19 @@ class LocationService extends ChangeNotifier {
   bool get addressError => _addressError;
 
   /// Start checking permissions and initializing location tracking.
-  Future<void> initialize() async {
+  Future<void> initialize({bool requestPermissionIfDenied = true}) async {
     if (_state != LocationState.initializing) {
       _setState(LocationState.initializing);
     }
 
     try {
-      // 1. Request location permissions FIRST
-      final status = await Permission.location.request();
+      PermissionStatus status = await Permission.location.status;
+      if (!status.isGranted && requestPermissionIfDenied) {
+        status = await Permission.location.request();
+      }
 
       if (status.isGranted) {
-        // 2. Check if location services (GPS) are enabled
+        // Check if location services (GPS) are enabled
         final serviceEnabled = await Geolocator.isLocationServiceEnabled();
         if (!serviceEnabled) {
           _setState(LocationState.serviceDisabled);
@@ -48,7 +58,7 @@ class LocationService extends ChangeNotifier {
         }
 
         _setState(LocationState.acquiring);
-        _startLocationStream();
+        await _startLocationStream();
         _listenToServiceStatus();
       } else if (status.isPermanentlyDenied) {
         _setState(LocationState.permissionPermanentlyDenied);
@@ -78,12 +88,37 @@ class LocationService extends ChangeNotifier {
     });
   }
 
-  void _startLocationStream() {
+  Future<void> _startLocationStream() async {
     _positionSubscription?.cancel();
 
-    final LocationSettings locationSettings = const LocationSettings(
+    // 1. Immediately check last known cached position for instantaneous UI update (< 20ms)
+    try {
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null && isValidPosition(lastKnown)) {
+        _handleNewPosition(lastKnown);
+      }
+    } catch (e) {
+      debugPrint('LocationService: Error reading last known position: $e');
+    }
+
+    // 2. Request fresh high-accuracy position in parallel to refine fix
+    Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+        timeLimit: Duration(seconds: 10),
+      ),
+    ).then((current) {
+      if (isValidPosition(current)) {
+        _handleNewPosition(current);
+      }
+    }).catchError((e) {
+      debugPrint('LocationService: Error getting current position: $e');
+    });
+
+    // 3. Keep live stream running with distanceFilter: 0 for instant real-time updates
+    const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.best,
-      distanceFilter: 1, // update every 1 meter
+      distanceFilter: 0,
     );
 
     _positionSubscription =
@@ -161,6 +196,11 @@ class LocationService extends ChangeNotifier {
   /// Opens system settings for permanently denied permissions.
   Future<void> openSettings() async {
     await openAppSettings();
+  }
+
+  /// Opens system location (GPS) settings.
+  Future<void> openLocationSettings() async {
+    await Geolocator.openLocationSettings();
   }
 
   /// Pauses the location stream (e.g. when app is backgrounded).

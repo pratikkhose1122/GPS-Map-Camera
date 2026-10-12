@@ -106,7 +106,14 @@ class OverlayRenderer {
     final double textStartX = mapOnLeft
         ? paddingX + mapW + (20 * scale)
         : paddingX;
-    final double availableTextWidth = layoutWidth - textStartX - paddingX;
+    final double qrReservedWidth =
+        (template == OverlayTemplate.scanLocation &&
+         snapshot.latitude != null &&
+         snapshot.longitude != null)
+            ? (220 * scale)
+            : 0;
+    final double availableTextWidth =
+        layoutWidth - textStartX - paddingX - qrReservedWidth;
 
     // Helper to add text row
     void addTextRow(String left, [String right = '']) {
@@ -146,8 +153,9 @@ class OverlayRenderer {
       addTextRow('Note:', metadata.note!);
     }
 
-    // 3. Time & Compass
-    if (template.showDateTime || template.showHeading || template.showCompass) {
+    // 3. Time & Compass (Standard for non-DateTime templates)
+    if (template != OverlayTemplate.dateTime &&
+        (template.showDateTime || template.showHeading || template.showCompass)) {
       if (template.showCompass) {
         // Bottom: Time
         if (template.showDateTime) {
@@ -267,7 +275,10 @@ class OverlayRenderer {
 
     // 6. Address
     if (template.showAddress) {
-      String addressText = snapshot.address ?? 'Address unavailable';
+      String addressText = snapshot.address ??
+          (snapshot.hasRequiredLocation
+              ? 'Locating address...'
+              : 'Address unavailable');
       final pAddress = TextPainter(
         text: TextSpan(text: addressText, style: addressStyle),
         textDirection: ui.TextDirection.ltr,
@@ -276,6 +287,71 @@ class OverlayRenderer {
       currentY -= pAddress.height;
       textsToDraw.add(_DrawnText(pAddress, Offset(textStartX, currentY)));
       currentY -= (4 * scale); // spacing
+    }
+
+    // 6b. Prominent DateTime Header for DateTime Template
+    Offset? dateTimeDividerStart;
+    Offset? dateTimeDividerEnd;
+    if (template == OverlayTemplate.dateTime) {
+      final now = snapshot.timestamp;
+      final timeStr = DateFormat('hh:mm a').format(now);
+      final dateStr = DateFormat('dd MMMM yyyy').format(now);
+      final dayStr = DateFormat('EEEE').format(now);
+
+      final bigTimeStyle = TextStyle(
+        color: Colors.white,
+        fontSize: 48 * scale,
+        fontWeight: FontWeight.bold,
+        shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
+      );
+      final smallDateStyle = TextStyle(
+        color: Colors.white,
+        fontSize: 18 * scale,
+        fontWeight: FontWeight.bold,
+        shadows: const [Shadow(color: Colors.black87, blurRadius: 2)],
+      );
+      final smallDayStyle = TextStyle(
+        color: Colors.white70,
+        fontSize: 16 * scale,
+        shadows: const [Shadow(color: Colors.black87, blurRadius: 2)],
+      );
+
+      final pTime = TextPainter(
+        text: TextSpan(text: timeStr, style: bigTimeStyle),
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+      final pDate = TextPainter(
+        text: TextSpan(text: dateStr, style: smallDateStyle),
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+      final pDay = TextPainter(
+        text: TextSpan(text: dayStr, style: smallDayStyle),
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+
+      final bannerHeight = math.max(
+        pTime.height,
+        pDate.height + pDay.height + (4 * scale),
+      );
+      currentY -= bannerHeight;
+
+      final double bannerY = currentY;
+      textsToDraw.add(_DrawnText(pTime, Offset(textStartX, bannerY)));
+
+      final double divX = textStartX + pTime.width + (14 * scale);
+      dateTimeDividerStart = Offset(divX, bannerY + (4 * scale));
+      dateTimeDividerEnd = Offset(divX, bannerY + bannerHeight - (4 * scale));
+
+      final double dateX = divX + (14 * scale);
+      textsToDraw.add(_DrawnText(pDate, Offset(dateX, bannerY + (2 * scale))));
+      textsToDraw.add(
+        _DrawnText(
+          pDay,
+          Offset(dateX, bannerY + pDate.height + (6 * scale)),
+        ),
+      );
+
+      currentY -= (12 * scale); // spacing above banner
     }
 
     // 7. App Logo & Camera Indicator
@@ -435,6 +511,45 @@ class OverlayRenderer {
           Paint()..isAntiAlias = true,
         );
         canvas.restore();
+
+        // Draw "Check In" badge for Reporting Template
+        if (template == OverlayTemplate.reporting) {
+          final double badgeH = 26 * scale;
+          final double badgeW = mapW - (16 * scale);
+          final Rect badgeRect = Rect.fromLTWH(
+            mapX + (8 * scale),
+            mapY + (8 * scale),
+            badgeW,
+            badgeH,
+          );
+          final RRect roundedBadge = RRect.fromRectAndRadius(
+            badgeRect,
+            Radius.circular(6 * scale),
+          );
+          canvas.drawRRect(
+            roundedBadge,
+            Paint()..color = const Color(0xFF4CAF50),
+          );
+
+          final checkInPainter = TextPainter(
+            text: TextSpan(
+              text: 'Check In',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14 * scale,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            textDirection: ui.TextDirection.ltr,
+          )..layout();
+          checkInPainter.paint(
+            canvas,
+            Offset(
+              badgeRect.left + (badgeW - checkInPainter.width) / 2,
+              badgeRect.top + (badgeH - checkInPainter.height) / 2,
+            ),
+          );
+        }
       } catch (e) {
         debugPrint('Failed to draw map image: $e');
       }
@@ -491,6 +606,15 @@ class OverlayRenderer {
     // Draw Texts
     for (final dt in textsToDraw) {
       dt.painter.paint(canvas, dt.offset);
+    }
+
+    // Draw DateTime accent divider bar
+    if (dateTimeDividerStart != null && dateTimeDividerEnd != null) {
+      final divPaint = Paint()
+        ..color = const Color(0xFFFFC107)
+        ..strokeWidth = 3.5 * scale
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(dateTimeDividerStart, dateTimeDividerEnd, divPaint);
     }
 
     // Draw App Logo Image

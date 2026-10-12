@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 class ImageComposer {
   final http.Client? httpClient;
+  bool lastMapFailed = false;
 
   ImageComposer({this.httpClient});
 
@@ -17,14 +18,25 @@ class ImageComposer {
     List<int> cameraImageBytes,
     CaptureMetadata metadata,
   ) async {
+    lastMapFailed = false;
     // 1. Fetch map image first (network call) if template requires it
-    // Map generation failure will throw and cancel composition gracefully.
+    // Map generation failure will not cancel photo composition; photo will be saved without map.
     Uint8List? mapBytes;
     if (metadata.template.showMap) {
-      mapBytes = await MapImageRenderer.getMapImage(
-        metadata.snapshot,
-        client: httpClient,
-      );
+      try {
+        mapBytes = await MapImageRenderer.getMapImage(
+          metadata.snapshot,
+          client: httpClient,
+        );
+      } catch (e, stack) {
+        lastMapFailed = true;
+        debugPrint(
+          'ImageComposer: Map generation failed, continuing without map: $e',
+        );
+        if (kDebugMode) {
+          debugPrint('ImageComposer map failure stack trace: $stack');
+        }
+      }
     }
 
     final decodeSw = Stopwatch()..start();

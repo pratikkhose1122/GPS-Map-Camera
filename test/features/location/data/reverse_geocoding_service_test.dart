@@ -10,7 +10,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('ReverseGeocodingService', () {
-    const channel = MethodChannel('com.gpsmapcamera.app/config');
+    const channel = MethodChannel('com.geomapcam.geotag/config');
 
     setUp(() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
